@@ -1,29 +1,29 @@
-# import libraries
-import pandas as pd
-import numpy as np
-import re
 import sys
+import pandas as pd
+from sqlalchemy import create_engine
+
+import nltk
+nltk.download(['punkt', 'wordnet', 'stopwords','averaged_perceptron_tagger'])
+
+import re
+from nltk.tokenize import word_tokenize 
+from nltk.stem.wordnet import WordNetLemmatizer 
 from sqlalchemy import create_engine
 from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.pipeline import Pipeline
+from sklearn.metrics import classification_report
+from sklearn.pipeline import Pipeline, FeatureUnion  
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
-from sklearn.multioutput import MultiOutputClassifier
-from sklearn.metrics import precision_recall_fscore_support
-from sklearn.tree import DecisionTreeClassifier
-import warnings
-warnings.simplefilter("ignore")
+from sklearn.model_selection import GridSearchCV
 
+
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.pipeline import Pipeline, FeatureUnion
 import pickle
-import nltk
-from nltk.tokenize import word_tokenize, RegexpTokenizer
-from nltk.stem import WordNetLemmatizer
-nltk.download(['punkt', 'wordnet', 'averaged_perceptron_tagger'])
+import warnings
+warnings.simplefilter("ignore")  
 
 url_regex = 'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
-
 class StartingVerbExtractor(BaseEstimator, TransformerMixin):
 
     def starting_verb(self, text):
@@ -42,16 +42,13 @@ class StartingVerbExtractor(BaseEstimator, TransformerMixin):
         X_tagged = pd.Series(X).apply(self.starting_verb)
         return pd.DataFrame(X_tagged)
 
-
 def load_data(database_filepath):
     
     # create engine to connect to the database
     engine = create_engine('sqlite:///' + database_filepath)
     
     # read the table from the database into a dataframe
-    df = pd.read_sql("SELECT * FROM MessagesCategories", engine)
-    
-    # create X from the "message" column
+    df = pd.read_sql("SELECT * FROM MessagesCategories", engine).head(7000)
     X = df['message']
 
     # create Y values from the 36 different category columns
@@ -60,49 +57,48 @@ def load_data(database_filepath):
     # take the category names
     category_names = list(Y.columns)
 
-    return X, Y, category_names
-
-def tokenize(text):
-    detected_urls = re.findall(url_regex, text)
-    for url in detected_urls:
+    return X, Y ,category_names
+ 
+def tokenize(text):    
+   detected_urls = re.findall(url_regex, text)
+   for url in detected_urls:
         text = text.replace(url, "urlplaceholder")
 
-    tokens = word_tokenize(text)
-    lemmatizer = WordNetLemmatizer()
+   tokens = word_tokenize(text)
+   lemmatizer = WordNetLemmatizer()
 
-    clean_tokens = []
-    for tok in tokens:
+   clean_tokens = []
+   for tok in tokens:
         clean_tok = lemmatizer.lemmatize(tok).lower().strip()
         clean_tokens.append(clean_tok)
+    
+   return clean_tokens
 
-    return clean_tokens
 
 
-def build_model():
-    # text processing and model pipeline
-    pipeline = Pipeline([
+
+def  build_model():
+    model = Pipeline([
         ('features', FeatureUnion([
-
+            
             ('text_pipeline', Pipeline([
-                ('vect', CountVectorizer(tokenizer=tokenize())),
+                ('vect', CountVectorizer(tokenizer=tokenize)),
                 ('tfidf', TfidfTransformer())
             ])),
 
             ('starting_verb', StartingVerbExtractor())
         ])),
-
+    
         ('clf', RandomForestClassifier())
     ])
-
-    parameters = {
-        'features__text_pipeline__vect__ngram_range': ((1, 1), (1, 2)),
-        'clf__n_estimators': [50, 100, 200],
-        'clf__min_samples_split': [2, 3, 4]
-    }
-
-    cv = GridSearchCV(pipeline, param_grid=parameters)
-    return cv
-
+    
+   # define parameters to be tuned with Grid_Search_CV    
+    parameters = { }
+    #   # use Grid_Search_CV for tuning the parameters defined above
+    model = GridSearchCV(model, parameters)
+        
+    return model 
+ 
 
 
 def evaluate_model(model, X_test, Y_test, category_names):
@@ -116,12 +112,10 @@ def evaluate_model(model, X_test, Y_test, category_names):
        
     pass
 
-
-
-
 def save_model(model, model_filepath):    
     # save model to a pickle file
-    pickle.dump(model, open(model_filepath, 'wb'))    
+    pickle.dump(model, open(model_filepath, 'wb'))
+    
     pass
 
 
@@ -133,18 +127,20 @@ def main():
         print('Loading data...\n    DATABASE: {}'.format(database_filepath))
         X, Y, category_names = load_data(database_filepath)
         X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2)
-        
+      
+         
         print('Building model...')
-        model = build_model()
+        pipeline = build_model()
+       
         
         print('Training model...')
-        model.fit(X_train, Y_train)
-        
+        pipeline.fit(X_train, Y_train) 
+                  
         print('Evaluating model...')
-        evaluate_model(model, X_test, Y_test, category_names)
+        evaluate_model(pipeline, X_test, Y_test, category_names)
 
         print('Saving model...\n    MODEL: {}'.format(model_filepath))
-        save_model(model, model_filepath)
+        save_model(pipeline, model_filepath)
 
         print('Trained model saved!')
 
